@@ -44,7 +44,7 @@ end
 
 # --- Data Loading and Preprocessing ---
 # Load data from CSV
-df = CSV.read("hbs_us.csv", DataFrame, stringtype=String)
+df = CSV.read("sales_data.csv", DataFrame, stringtype=String)
 df = dropmissing(df)
 
 # Parse dates
@@ -90,7 +90,6 @@ plt = plot(
     legend=:topright,
     marker=:circle
 )
-display(plt)
 
 # --- Fit Prior Distributions with KDE ---
 weekly_kdes__prior = Dict()

@@ -5,7 +5,7 @@ include("helper.jl")
 using .Helper
 
 # Load and preprocess data
-df = CSV.read("hbs_us.csv", DataFrame, stringtype=String)
+df = CSV.read("sales_data.csv", DataFrame, stringtype=String)
 df = dropmissing(df)
 @transform!(df, :converted_date = tryparse.(Date, :date, dateformat"m/d/yyyy"))
 sort!(df, :converted_date)
@@ -50,7 +50,6 @@ plt = plot(
     legend=:topright,
     marker=:circle
 )
-display(plt)
 
 # Calculate cumulative sales
 # Replace missing weekly_sales with 0 for cumsum
@@ -60,7 +59,7 @@ df_all_weekly.weekly_sales = coalesce.(df_all_weekly.weekly_sales, 0.0)
 df_all_weekly = @transform(groupby(df_all_weekly, :season_id), :cum_sales = cumsum(:weekly_sales))
 
 # Plot cumulative sales by season
-plt_cum = plot(
+plt_cuml = plot(
     df_all_weekly.week_of_season,
     df_all_weekly.cum_sales,
     group=df_all_weekly.season_id,
@@ -70,7 +69,6 @@ plt_cum = plot(
     legend=:topleft,
     marker=:circle
 )
-# display(plt_cum)
 
 df, df_all_weekly = nothing, nothing  # Free up memory
 
