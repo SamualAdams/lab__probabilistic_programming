@@ -39,7 +39,15 @@ function cdf_kde(kde::UnivariateKDE, x)
     cdf_vals = cumsum(pdf_vals .* step(grid_x))
     cdf_vals /= cdf_vals[end]  # Normalize to 1
     interp = interpolate((grid_x,), cdf_vals, Gridded(Linear()))
-    return clamp(interp(x), 0.0, 1.0)  # Ensure bounds
+    
+    # Handle out-of-range values explicitly
+    if x < minimum(grid_x)
+        return 0.0
+    elseif x > maximum(grid_x)
+        return 1.0
+    else
+        return interp(x)  # No need for clamp here, since interp(x) is between 0 and 1
+    end
 end
 
 # --- Data Loading and Preprocessing ---
@@ -134,13 +142,13 @@ end
 
 # --- Compute Cumulative Demand with KDE ---
 """
-    compute_cumulative_demand(weekly_kdes, current_week, df__weekly; n_samples=10000)
+    compute_cumulative_demand__kde(weekly_kdes, current_week, df__weekly; n_samples=10000)
 Compute cumulative demand distribution from `current_week` to end of season using KDE.
 """
-function compute_cumulative_demand(weekly_kdes, current_week, df__weekly; n_samples=10000)
+function compute_cumulative_demand__kde(weekly_kdes, current_week, df__weekly; n_samples=10000)
     future_weeks = current_week:31
     weekly_samples = [rand_kde(weekly_kdes[w], n_samples) for w in future_weeks if haskey(weekly_kdes, w) && weekly_kdes[w] !== nothing]
-    cumulative_samples = sum(weekly_samples, dims=1)[:]
+    cumulative_samples = sum(weekly_samples)  # Sum across weeks, element-wise
     cumulative_kde = kde(cumulative_samples)
     
     x_vals = range(minimum(cumulative_samples), maximum(cumulative_samples), length=100)
@@ -172,10 +180,10 @@ end
 
 # Execute for a specific week
 current_week = 21
-cumulative_kde = compute_cumulative_demand(weekly_kdes__posterior, current_week, df__weekly_hist)
+cumulative_kde = compute_cumulative_demand__kde(weekly_kdes__posterior, current_week, df__weekly_hist)
 
 # --- Inventory Analysis ---
-inventory_level = 7191
+inventory_level = 6000
 inventory_cdf = cdf_kde(cumulative_kde, inventory_level)
 inventory_percentile = inventory_cdf * 100
 stockout_probability = (1 - inventory_cdf) * 100
@@ -201,9 +209,10 @@ plt = plot(
 )
 vline!([inventory_level], label="Inventory Level ($inventory_level)", linestyle=:dash, color=:red)
 annotate!([
-    (inventory_level * 1.01, 0.12, text("Inventory: $(format("{:,}", inventory_level))", 8, :red, :left)),
-    (inventory_level * 1.01, 0.08, text("Demand Coverage: $(@sprintf("%.0f", inventory_percentile))%", 8, :red, :left)),
-    (inventory_level * 1.01, 0.04, text("Stockout Probability: $(@sprintf("%.0f", stockout_probability))%", 8, :red, :left))
+    (inventory_level * 1.01, 0.18, text("KDE Model Results:", 8, :red, :left)),
+    (inventory_level * 1.01, 0.12, text("Inventory = $(format("{:,}", inventory_level))", 8, :red, :left)),
+    (inventory_level * 1.01, 0.08, text("Demand Coverage = $(@sprintf("%.0f", inventory_percentile))%", 8, :red, :left)),
+    (inventory_level * 1.01, 0.04, text("Stockout Probability = $(@sprintf("%.0f", stockout_probability))%", 8, :red, :left))
 ])
 display(plt)
 

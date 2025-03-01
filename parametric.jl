@@ -191,7 +191,7 @@ end
 cumulative_dist = compute_cumulative_demand(weekly_dists__posterior, current_week, df__weekly)
 
 ### --- inventory analysis --- ###
-inventory_level = 7191  # Set current inventory level
+inventory_level = 6000  # Set current inventory level
 
 # Define x-axis range for visualization
 x_min = max(0, quantile(cumulative_dist, 0.01))  # Ensure non-negative min
@@ -227,9 +227,10 @@ vline!([inventory_level], label="Inventory Level ($inventory_level)", linestyle=
 
 # Add annotations for inventory risk analysis
 annotate!([
-    (inventory_level * 1.01, 0.12, text("Inventory: $(format("{:,}", inventory_level))", 8, :red, :left)),
-    (inventory_level * 1.01, 0.08, text("Demand Coverage: $(@sprintf("%.0f", inventory_percentile))%", 8, :red, :left)),
-    (inventory_level * 1.01, 0.04, text("Stockout Probability: $(@sprintf("%.0f", stockout_probability))%", 8, :red, :left))
+    (inventory_level * 1.01, 0.18, text("Parametric Model Results:", 8, :red, :left)),
+    (inventory_level * 1.01, 0.12, text("Inventory =  $(format("{:,}", inventory_level))", 8, :red, :left)),
+    (inventory_level * 1.01, 0.08, text("Demand Coverage = $(@sprintf("%.0f", inventory_percentile))%", 8, :red, :left)),
+    (inventory_level * 1.01, 0.04, text("Stockout Probability = $(@sprintf("%.0f", stockout_probability))%", 8, :red, :left))
 ])
 
 display(plt)
