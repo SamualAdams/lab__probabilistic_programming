@@ -17,7 +17,7 @@ adaptive_rolling_mean(series::Vector{Float64}, window::Int=7)
 Computes a centered rolling mean with a minimum of 1 period.
 """
 #tag +adapt_rolling_mean
-function adaptive_rolling_mean(series::Vector{Float64}, window::Int=7)
+function adaptive_rolling_mean(series::Vector{Int64}, window::Int=7)
     n = length(series)
     result = zeros(Float64, n)
     half_window = div(window, 2)
@@ -55,7 +55,7 @@ end
 Computes CDF for interval demand forecast and returns x, probabilities, and intersection probability.
 """
 #tag +cdf_from_df_with_pcols
-function compute_interval_demand_cdf(df::DataFrame, week_start::Int, week_end::Int, inventory_level::Float64)
+function compute_interval_demand_cdf(df::DataFrame, week_start::Int, week_end::Int, inventory_level::Int)
 
     if week_end <= week_start
         println("Error: week_end must be greater than week_start.")
@@ -85,19 +85,19 @@ end
 
 
 """
-    adaptive_kde_by_week(df::DataFrame, value_column::Symbol, window::Int=7)
+    adaptive_kde_by_week(df::DataFrame, sales_column::Symbol, window::Int=7)
 Fits KDEs to smoothed data for each week using a sliding window.
 """
 #tag +adapt_fit_kde_to_smooth
-function adaptive_kde_by_week(df::DataFrame, value_column::Symbol, window::Int=7)
+function adaptive_kde_by_week(df::DataFrame, sales_column::Symbol, window::Int=7)
     weeks = sort(unique(df.week_of_season))
     half = div(window, 2)
     kde_dict = Dict()
     for (i, week) in enumerate(weeks)
         valid_weeks = weeks[max(1, i - half):min(length(weeks), i + half)]
-        values = filter(row -> row.week_of_season in valid_weeks, df)[!, value_column]
-        if length(values) >= 2
-            smoothed = adaptive_rolling_mean(values, window)
+        saless = filter(row -> row.week_of_season in valid_weeks, df)[!, sales_column]
+        if length(saless) >= 2
+            smoothed = adaptive_rolling_mean(saless, window)
             kde_dict[week] = KernelDensity.kde(smoothed)
         else
             kde_dict[week] = nothing
@@ -117,12 +117,12 @@ function sample_from_kde(kde_model::UnivariateKDE, num_samples::Int)
     # Define a fine grid over the support of the KDE
     x = range(minimum(kde_model.x), maximum(kde_model.x), length=1000)
     # Compute the PDF on this grid
-    pdf_values = KernelDensity.pdf(kde_model, x)
+    pdf_saless = KernelDensity.pdf(kde_model, x)
     # Approximate the CDF via cumulative sum (normalize to 1)
-    cdf_values = cumsum(pdf_values .* step(x))
-    cdf_values ./= cdf_values[end]  # Ensure CDF ends at 1
+    cdf_saless = cumsum(pdf_saless .* step(x))
+    cdf_saless ./= cdf_saless[end]  # Ensure CDF ends at 1
     # Create an inverse CDF using interpolation
-    inverse_cdf = LinearInterpolation(cdf_values, x, extrapolation_bc=Throw())
+    inverse_cdf = LinearInterpolation(cdf_saless, x, extrapolation_bc=Throw())
     # Sample uniformly from [0, 1] and map to the inverse CDF
     u = rand(num_samples)
     samples = inverse_cdf.(u)
@@ -178,7 +178,7 @@ function Dataset(df::DataFrame; with_nulls::Bool=false, record_frequency::String
     if !isnothing(analysis_frequency) && analysis_frequency != record_frequency
         freq = analysis_frequency
         grouped = groupby(dfc, :date)
-        dfc = combine(grouped, :value => sum => :value)
+        dfc = combine(grouped, :sales => sum => :sales)
     end
     if with_nulls
         min_date = minimum(dfc.date)
@@ -186,17 +186,17 @@ function Dataset(df::DataFrame; with_nulls::Bool=false, record_frequency::String
         full_range = Date(min_date):Day(1):Date(max_date)
         df_full = DataFrame(date=collect(full_range))
         dfc = leftjoin(df_full, dfc, on=:date)
-        dfc[!, :value] = coalesce.(dfc.value, 0.0)
+        dfc[!, :sales] = coalesce.(dfc.sales, 0.0)
     else
-        dropmissing!(dfc, :value)
+        dropmissing!(dfc, :sales)
     end
     if !isnothing(smooth_window)
-        valvec = dfc[!, :value]
+        valvec = dfc[!, :sales]
         val_smooth = adaptive_rolling_mean(valvec, smooth_window)
         half_window = div(smooth_window, 2)
         N = length(val_smooth)
         if N > 2 * half_window
-            dfc[!, :value] = val_smooth
+            dfc[!, :sales] = val_smooth
             dfc = dfc[(half_window+1):(N-half_window), :]
         else
             @warn("Smoothing window too large for dataset, using original data")
@@ -206,28 +206,26 @@ function Dataset(df::DataFrame; with_nulls::Bool=false, record_frequency::String
 end
 #endregion
 
+
 #region main_script
 
 # Load dataset (assumes sales_data.csv has 'date' and 'sales' columns)
 #tag load_raw_data
-df_hbs_blitz = CSV.read("sales_data.csv", DataFrame)
+df = CSV.read("sales_data.csv", DataFrame)
 
-#tag rename_and_sort
-rename!(df_hbs_blitz, "sales" => "value")
-df_hbs_blitz[!, :date] = Date.(df_hbs_blitz.date, "m/d/yyyy")
-df = df_hbs_blitz[:, [:value, :date]]
+#tag date_sort_&_format
+df[!, :date] = Date.(df.date, "m/d/yyyy")
 sort!(df, :date)
 
 #tag add_analysis_cols
 df = DataFrame(
-    sales=Float64.(df_test.value),
-    time_numeric=Int.(Dates.value.(df_test.date .- df_test.date[1])),
-    onseason_flag=[month(d) in [10, 11, 12, 1, 2, 3, 4] ? 1 : 0 for d in df_test.date],
-    season_start=[(month(d) == 1 && day(d) == 1) for d in df_test.date],
-    week_of_year=Int.(week.(df_test.date)),
-    month=Int.(month.(df_test.date)),
-    year=Int.(year.(df_test.date)),
-    date=df_test.date
+    sales=df.sales,
+    onseason_flag=[month(d) in [10, 11, 12, 1, 2, 3, 4] ? 1 : 0 for d in df.date],
+    season_start=[(month(d) == 1 && day(d) == 1) for d in df.date],
+    week_of_year=Int.(week.(df.date)),
+    month=Int.(month.(df.date)),
+    year=Int.(year.(df.date)),
+    date=df.date
 )
 
 # Assign season_id
@@ -236,44 +234,33 @@ df[!, :season_id] = cumsum(df.season_start)
 # Filter on-season data
 df_on_season = filter(row -> row.onseason_flag == 1, df)
 
-# Compute seasonal indicators
-if !isempty(df_on_season)
-    df_on_season = transform(groupby(df_on_season, :season_id), :sales => (x -> 1:length(x)) => :day_of_season)
-    df_on_season[!, :week_of_season] = div.(df_on_season.day_of_season .- 1, 7) .+ 1
-else
-    println("Warning: No on-season data found, creating empty DataFrame")
-    df_on_season = DataFrame(season_id=Int[], sales=Float64[], time_numeric=Int[], onseason_flag=Int[],
-        season_start=Bool[], week_of_year=Int[], month=Int[], year=Int[], date=Date[],
-        day_of_season=Int[], week_of_season=Int[])
-end
+#tag add_week_of_season
+df_on_season = transform(groupby(df_on_season, :season_id), :sales => (x -> 1:length(x)) => :day_of_season)
+df_on_season[!, :week_of_season] = div.(df_on_season.day_of_season .- 1, 7) .+ 1
 
-# Group by season and week
+#tag Groupby_season_&_week
 df_grouped = combine(groupby(df_on_season, [:season_id, :week_of_season, :onseason_flag]),
     :sales => sum => :sales,
     :date => first => :date)
 
+typeof(df_grouped.sales)
+
 # Add smoothed, normalized, and cumulative sales
-if !isempty(df_grouped)
-    df_grouped[!, :smoothed_sales] = adaptive_rolling_mean(df_grouped.sales, 7)
-    df_grouped = transform(groupby(df_grouped, :season_id),
-        :smoothed_sales => (x -> (x .- mean(x)) ./ std(x)) => :normalized_sales,
-        :smoothed_sales => cumsum => :cumulative_sales)
-else
-    println("Warning: No grouped data, creating empty DataFrame")
-    df_grouped = DataFrame(season_id=Int[], week_of_season=Int[], onseason_flag=Int[],
-        sales=Float64[], date=Date[], smoothed_sales=Float64[],
-        normalized_sales=Float64[], cumulative_sales=Float64[])
-end
+df_grouped[!, :smoothed_sales] = adaptive_rolling_mean(df_grouped.sales)
+df_grouped = transform(groupby(df_grouped, :season_id),
+    :smoothed_sales => (x -> (x .- mean(x)) ./ std(x)) => :normalized_sales,
+    :smoothed_sales => cumsum => :cumulative_sales)
 
 display(df_grouped)
+CSV.write("scratch.csv", df_grouped)
 
 # Parameters
 week_start = 21
 week_end = 31
-inventory_level = 6000.0  # Adjusted to approximate 7,193 with 90% probability
+inventory_level = 6000
 seasons = unique(df_grouped.season_id)
 
-# Process latest season with KDE and percentiles
+#tag Process latest season with KDE and percentiles
 latest_season_id = maximum(seasons)
 df_focal = filter(row -> row.season_id == latest_season_id, df_grouped)
 if !isempty(df_focal)
@@ -286,9 +273,6 @@ if !isempty(df_focal)
     df_focal[!, :season_id] .= latest_season_id * 1000
 
     display(df_focal)
-
-    # df_focal[!, :time_numeric] = df_focal.time_numeric .+ season_length .+ 7
-    # season_length = maximum(df_focal.time_numeric) - minimum(df_focal.time_numeric)
 
     df_focal[!, :baseline_sales_std] = rolling_std(df_focal.root_sales, 5)
 
@@ -305,8 +289,6 @@ else
     println("Warning: No data for latest season, skipping KDE and percentiles")
 end
 
-display(names(df_focal))
-
 # Compute forecast CDF
 x_forecast, cdf_forecast, intersection_prob_forecast = if !isempty(df_focal)
     compute_interval_demand_cdf(df_focal, week_start, week_end, inventory_level)
@@ -319,7 +301,6 @@ end
 #region vis
 
 # Ensure PlotlyJS is imported (add this at the top of your script if not already present)
-using PlotlyJS
 
 # Compute additional metrics for annotation
 inventory_percentile = round(intersection_prob_forecast * 100, digits=0)
