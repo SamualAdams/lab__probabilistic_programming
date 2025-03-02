@@ -1,10 +1,14 @@
+# Clear garbage collection
 GC.gc()
 
+# Load required packages
 using DataFrames, Dates, CSV, Plots, Statistics, DataFramesMeta, Distributions, Measures, Printf, Formatting
+
+# Include helper functions (assuming a helper.jl file exists with compute_cumulative_demand)
 include("helper.jl")
 using .Helper
 
-# Load and preprocess data
+# Load and preprocess sales data
 df = CSV.read("sales_data.csv", DataFrame, stringtype=String)
 df = dropmissing(df)
 @transform!(df, :converted_date = tryparse.(Date, :date, dateformat"m/d/yyyy"))
@@ -35,7 +39,7 @@ end
 df__on_season = filter(row -> row.onseason == 1, df)
 df__weekly = combine(groupby(df__on_season, [:season_id, :week_of_season]), :sales => sum => :weekly_sales)
 
-# Visualization
+# Visualization of weekly sales
 df_season8 = filter(row -> row.season_id == 8, df__weekly)
 df__weekly = filter(row -> row.season_id in [2, 3, 4, 5, 6, 7], df__weekly)
 df_all_weekly = vcat(df__weekly, df_season8)
@@ -51,14 +55,10 @@ plt = plot(
     marker=:circle
 )
 
-# Calculate cumulative sales
-# Replace missing weekly_sales with 0 for cumsum
+# Calculate and plot cumulative sales
 df_all_weekly.weekly_sales = coalesce.(df_all_weekly.weekly_sales, 0.0)
-
-# Calculate cumulative sales
 df_all_weekly = @transform(groupby(df_all_weekly, :season_id), :cum_sales = cumsum(:weekly_sales))
 
-# Plot cumulative sales by season
 plt_cuml = plot(
     df_all_weekly.week_of_season,
     df_all_weekly.cum_sales,
@@ -70,14 +70,14 @@ plt_cuml = plot(
     marker=:circle
 )
 
-df, df_all_weekly = nothing, nothing  # Free up memory
+# Free up memory
+df, df_all_weekly = nothing, nothing
 
-### --- Fit Prior Distributions for Each Week of Season --- ###
+### Fit Prior Distributions for Each Week of Season ###
 weekly_dists__prior = Dict()
 
-# initialize priors
 for w in 1:31
-    # define "focal weeks" for smoothing, handling edge weeks (1 and 31)
+    # Define focal weeks for smoothing
     focal_weeks = if w == 1
         [w, w + 1, w + 2]
     elseif w == 31
@@ -86,81 +86,81 @@ for w in 1:31
         [w - 1, w, w + 1]
     end
 
-    # extract historical sales data for focal weeks
+    # Extract historical sales data for focal weeks
     week_data = filter(row -> row.week_of_season in focal_weeks, df__weekly).weekly_sales
 
-    # compute parameters for prior distributions
-    mu_prior, sigma_prior = mean(week_data), max(std(week_data), .01) # ensure nonzero std deviation with max function
-    prior_dist = Normal(mu_prior, sigma_prior)
+    # Compute Gamma distribution parameters
+    mean_sales = mean(week_data)
+    var_sales = var(week_data)
+    if var_sales == 0  # Handle zero variance
+        var_sales = 1e-6
+    end
+    α_prior = mean_sales^2 / var_sales
+    θ_prior = var_sales / mean_sales
+    prior_dist = Gamma(α_prior, θ_prior)
 
-    # store prior in dict before updating
+    # Store prior distribution
     weekly_dists__prior[w] = prior_dist
-
 end
 
-### --- Compute Probabilistic Cumulative Demand --- ###
-current_week = 21  # Define current week for forecasting
+### Compute Probabilistic Cumulative Demand ###
+current_week = 21
 cumulative_dist = compute_cumulative_demand(weekly_dists__prior, current_week, df__weekly)
 
+### Posterior Update Using Season 8 Orders ###
 weekly_dists__posterior = weekly_dists__prior
-
-### --- Posterior Update Using Season 8 Orders --- ###
 weeks_with_data = Int[]
 drift_values = Float64[]
 
-# Define window parameters
-window_half_width = 2  # e.g., ±2 weeks
-min_points = 2         # Minimum points needed to compute sigma
+# Window parameters
+window_half_width = 2
+min_points = 2
 
 for w in 1:31
-    # Define the dynamic window (e.g., w-2 to w+2, clamped to 1-31)
+    # Define dynamic window
     window = max(1, w - window_half_width):min(31, w + window_half_width)
     
-    # Extract new evidence from Season 8 within the window
+    # Extract Season 8 data within the window
     week_data_new = filter(row -> row.week_of_season in window, df_season8).weekly_sales
 
-    # If no data exists in the window, skip it
     if isempty(week_data_new)
         println("Week $w: No new data in window $window")
         continue
     end
 
-    # Handle missing values by treating them as 0
     week_data_new = coalesce.(week_data_new, 0.0)
-
-    # Compute mu and sigma based on windowed data
+    n = length(week_data_new)
     mu_data = mean(week_data_new)
-    if length(week_data_new) < min_points
-        # Too few points to compute a reliable sigma
-        sigma_data = 0.1  # Default fallback
-        println("Week $w (window $window, $(length(week_data_new)) points): mu_data = $mu_data, sigma_data = $sigma_data (default)")
+    if n < min_points
+        sigma_data = 0.1  # Default for insufficient data
+        println("Week $w (window $window, $n points): mu_data = $mu_data, sigma_data = $sigma_data (default)")
     else
         sigma_data = max(std(week_data_new), 0.01)
-        println("Week $w (window $window, $(length(week_data_new)) points): mu_data = $mu_data, sigma_data = $sigma_data")
+        println("Week $w (window $window, $n points): mu_data = $mu_data, sigma_data = $sigma_data")
     end
 
-    # Retrieve prior distribution
+    # Adjust likelihood variance
+    sigma_likelihood = n >= 2 ? sigma_data / sqrt(n) : sigma_data
+
+    # Retrieve prior distribution moments
     prior_dist = weekly_dists__prior[w]
-    mu_prior, sigma_prior = mean(prior_dist), std(prior_dist)
+    mu_prior = mean(prior_dist)
+    sigma_prior = std(prior_dist)
 
-    # Ensure sigma_data is valid (mostly redundant now, but kept for robustness)
-    if isnan(sigma_data) || sigma_data ≤ 0
-        sigma_data = 0.1
-    end
+    # Bayesian update using normal approximation
+    precision_prior = 1 / sigma_prior^2
+    precision_likelihood = 1 / sigma_likelihood^2
+    precision_posterior = precision_prior + precision_likelihood
+    mu_posterior = (mu_prior * precision_prior + mu_data * precision_likelihood) / precision_posterior
+    sigma_posterior = sqrt(1 / precision_posterior)
 
-    # Perform Bayesian update using normal-normal conjugate
-    mu_posterior = (sigma_prior^2 * mu_data + sigma_data^2 * mu_prior) / (sigma_prior^2 + sigma_data^2)
-    sigma_posterior = sqrt((1 / sigma_prior^2 + 1 / sigma_data^2)^-1)
+    # Convert to Gamma parameters
+    α_post = (mu_posterior / sigma_posterior)^2
+    θ_post = sigma_posterior^2 / mu_posterior
+    weekly_dists__posterior[w] = Gamma(α_post, θ_post)
 
-    # Update posterior distribution
-    weekly_dists__posterior[w] = Normal(mu_posterior, sigma_posterior)
-
-    # Calculate and store relative drift
-    if abs(mu_prior) < 0.01
-        relative_drift = 0.0
-    else
-        relative_drift = (mu_posterior - mu_prior) / mu_prior
-    end
+    # Calculate relative drift
+    relative_drift = abs(mu_prior) < 0.01 ? 0.0 : (mu_posterior - mu_prior) / mu_prior
     push!(weeks_with_data, w)
     push!(drift_values, relative_drift)
 end
@@ -168,42 +168,37 @@ end
 # Compute base aggregate drift
 base_drift = isempty(drift_values) ? 0.0 : mean(drift_values)
 
-# Update weeks without new data with decayed drift
+# Update weeks without new data
 for w in 1:31
-    if !haskey(weekly_dists__posterior, w) || weekly_dists__posterior[w] == weekly_dists__prior[w]
-        mu_prior, sigma_prior = mean(weekly_dists__prior[w]), std(weekly_dists__prior[w])
+    if !(w in weeks_with_data)
+        prior_dist = weekly_dists__prior[w]
+        α_prior = shape(prior_dist)
+        θ_prior = scale(prior_dist)
         
-        # Calculate distance to nearest week with data
-        if isempty(weeks_with_data)
-            adjusted_drift = 0.0
-        else
-            min_distance = minimum(abs.(w .- weeks_with_data))
-            # Apply exponential decay (e.g., decay rate = 0.1 per week)
-            adjusted_drift = base_drift * exp(-0.1 * min_distance)
-        end
-        
-        mu_adjusted = mu_prior * (1 + adjusted_drift)
-        weekly_dists__posterior[w] = Normal(mu_adjusted, sigma_prior)
+        min_distance = isempty(weeks_with_data) ? 0 : minimum(abs.(w .- weeks_with_data))
+        adjusted_drift = base_drift * exp(-0.1 * min_distance)
+        θ_adjusted = θ_prior * (1 + adjusted_drift)
+        weekly_dists__posterior[w] = Gamma(α_prior, θ_adjusted)
     end
 end
 
-### --- Compute Probabilistic Cumulative Demand --- ###
+### Compute Posterior Cumulative Demand ###
 cumulative_dist = compute_cumulative_demand(weekly_dists__posterior, current_week, df__weekly)
 
-### --- inventory analysis --- ###
-inventory_level = 6000  # Set current inventory level
+### Inventory Analysis ###
+inventory_level = 6000
 
-# Define x-axis range for visualization
-x_min = max(0, quantile(cumulative_dist, 0.01))  # Ensure non-negative min
+# Define x-axis range
+x_min = max(0, quantile(cumulative_dist, 0.01))
 x_max = max(inventory_level * 1.1, quantile(cumulative_dist, 0.99))
 x_vals = range(x_min, x_max, length=100)
 
-# Compute probability of stockout (demand exceeding inventory)
+# Compute stockout probability
 inventory_cdf = cdf(cumulative_dist, inventory_level)
 inventory_percentile = inventory_cdf * 100
 stockout_probability = (1 - inventory_cdf) * 100
 
-### --- Visualization: CDF with Inventory Level --- ###
+### Visualization: CDF with Inventory Level ###
 plt = plot(
     x_vals,
     cdf.(cumulative_dist, x_vals),
@@ -222,12 +217,12 @@ plt = plot(
     bottommargin=10mm
 )
 
-# Add a vertical line at inventory level
+# Add inventory level line
 vline!([inventory_level], label="Inventory Level ($inventory_level)", linestyle=:dash, color=:red)
 
-# Add annotations for inventory risk analysis
+# Add annotations
 annotate!([
-    (inventory_level * 1.01, 0.18, text("Parametric Model Results:", 8, :red, :left)),
+    (inventory_level * 1.01, 0.18, text("Parametric (Gamma) Model:", 8, :red, :left)),
     (inventory_level * 1.01, 0.12, text("Inventory =  $(format("{:,}", inventory_level))", 8, :red, :left)),
     (inventory_level * 1.01, 0.08, text("Demand Coverage = $(@sprintf("%.0f", inventory_percentile))%", 8, :red, :left)),
     (inventory_level * 1.01, 0.04, text("Stockout Probability = $(@sprintf("%.0f", stockout_probability))%", 8, :red, :left))
