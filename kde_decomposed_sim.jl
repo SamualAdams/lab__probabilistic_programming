@@ -78,7 +78,7 @@ function compute_interval_demand_cdf(df::DataFrame, week_start::Int, week_end::I
     end
     row_start = data_start[1, :]
     row_end = data_end[1, :]
-    interval_demand = [row_end[Symbol("p$p_cumulative")] - row_start[Symbol("p$p_cumulative")] for p in 1:100]
+    interval_demand = [row_end[Symbol("p$(p)_cumulative")] - row_start[Symbol("p$(p)_cumulative")] for p in 1:100]
     probabilities = [p / 100 for p in 1:100]
     closest_idx = argmin(abs.(interval_demand .- inventory_level))
     intersection_prob = probabilities[closest_idx]
@@ -221,7 +221,7 @@ sort!(df_test, :date)
 df = DataFrame(
     sales = Float64.(df_test.value),
     time_numeric = Int.(Dates.value.(df_test.date .- df_test.date[1])),
-    onseason_flag = [month(d) in [10, 11, 12, 1, 2, 3, 4, 5] ? 1 : 0 for d in df_test.date],
+    onseason_flag = [month(d) in [10, 11, 12, 1, 2, 3, 4] ? 1 : 0 for d in df_test.date],
     season_start = [(month(d) == 1 && day(d) == 1) for d in df_test.date],
     week_of_year = Int.(week.(df_test.date)),
     month = Int.(month.(df_test.date)),
@@ -270,8 +270,8 @@ display(df_grouped)
 
 # Parameters
 week_start = 21
-week_end = 30
-inventory_level = 7192.0  # Adjusted to approximate 7,193 with 90% probability
+week_end = 31
+inventory_level = 6000.0  # Adjusted to approximate 7,193 with 90% probability
 seasons = unique(df_grouped.season_id)
 
 # Process latest season with KDE and percentiles
@@ -306,42 +306,111 @@ else
     println("Warning: No data for latest season, skipping KDE and percentiles")
 end
 
-display(df_focal)
+display(names(df_focal))
 
 # Compute forecast CDF
-compute_interval_demand_cdf(df_focal, week_start, week_end, inventory_level)
-# x_forecast, cdf_forecast, intersection_prob_forecast = if !isempty(df_focal)
-# else
-#     prt
-#     nothing, nothing, nothing
-# end
-
-# Visualization
-fig = PlotlyJS.plot()
-if !isnothing(x_forecast) && !isnothing(cdf_forecast)
-    PlotlyJS.add_trace!(fig, PlotlyJS.scatter(x=x_forecast, y=cdf_forecast, mode="lines", 
-                                              line=PlotlyJS.attr(color="gold", width=2), 
-                                              name="Forecast (Season $latest_season_id)"))
-end
-
-if !isempty(fig.data)
-    PlotlyJS.add_trace!(fig, PlotlyJS.scatter(x=[inventory_level, inventory_level], y=[0, intersection_prob_forecast], 
-                                              mode="lines", line=PlotlyJS.attr(dash="dash", color="cyan"), 
-                                              name="Inventory Level: $inventory_level ($(round(intersection_prob_forecast*100))%)"))
-    layout = PlotlyJS.Layout(
-        title="CDF of Demand Forecast (Week $week_start to $week_end)",
-        xaxis_title="Interval Demand",
-        yaxis_title="Cumulative Probability",
-        yaxis=PlotlyJS.attr(range=[0, 1], tickformat=".0%"),
-        xaxis=PlotlyJS.attr(range=[4000, 9000], tickformat=",", separatethousands=true),
-        showlegend=true,
-        template="plotly_dark",  # Black background
-        showgrid=true,
-        gridcolor="rgba(255, 255, 255, 0.2)"  # Faint white grid lines
-    )
-    PlotlyJS.display(PlotlyJS.plot(fig, layout))
+x_forecast, cdf_forecast, intersection_prob_forecast = if !isempty(df_focal)
+    compute_interval_demand_cdf(df_focal, week_start, week_end, inventory_level)
 else
-    println("Warning: No data to plot, skipping visualization")
+    nothing, nothing, nothing
 end
 
-println("Done!")
+# Ensure PlotlyJS is imported (add this at the top of your script if not already present)
+using PlotlyJS
+
+# Compute additional metrics for annotation
+inventory_percentile = round(intersection_prob_forecast * 100, digits=0)
+stockout_probability = 100 - inventory_percentile
+
+# Create forecast CDF trace
+forecast_trace = PlotlyJS.scatter(
+    x = x_forecast,
+    y = cdf_forecast,
+    mode = "lines",
+    line = PlotlyJS.attr(color="gold", width=2),
+    name = "Cumulative Demand CDF"
+)
+
+# Create inventory vertical line trace
+inventory_trace = PlotlyJS.scatter(
+    x = [inventory_level, inventory_level],
+    y = [0, intersection_prob_forecast],
+    mode = "lines",
+    line = PlotlyJS.attr(color="red", dash="dash"),
+    name = "Inventory Level ($inventory_level)"
+)
+
+# Define dynamic x-axis range
+x_range = [minimum(x_forecast) - 0.1*(maximum(x_forecast)-minimum(x_forecast)),
+           maximum(x_forecast) + 0.1*(maximum(x_forecast)-minimum(x_forecast))]
+
+# Define layout with desired styling
+layout = PlotlyJS.Layout(
+    title = "Cumulative Demand CDF (Week $week_start to End of Season)",
+    xaxis = PlotlyJS.attr(
+        title = "Cumulative Sales",
+        range = x_range,
+        tickformat = ","
+    ),
+    yaxis = PlotlyJS.attr(
+        title = "Cumulative Probability",
+        range = [0, 1],
+        tickformat = ".0%"
+    ),
+    width = 800,
+    height = 600,
+    legend = PlotlyJS.attr(x=1.05, y=1, xanchor="left", yanchor="top", font=PlotlyJS.attr(size=10)),
+    margin = PlotlyJS.attr(l=40, r=40, t=40, b=40),
+    template = "plotly_dark",
+    annotations = [
+        PlotlyJS.attr(
+            x = inventory_level * 1.01,
+            y = 0.18,
+            xref = "x",
+            yref = "paper",
+            text = "KDE Model Results:",
+            font = PlotlyJS.attr(size=8, color="red"),
+            showarrow = false,
+            align = "left"
+        ),
+        PlotlyJS.attr(
+            x = inventory_level * 1.01,
+            y = 0.12,
+            xref = "x",
+            yref = "paper",
+            text = "Inventory = $(round(inventory_level))",
+            font = PlotlyJS.attr(size=8, color="red"),
+            showarrow = false,
+            align = "left"
+        ),
+        PlotlyJS.attr(
+            x = inventory_level * 1.01,
+            y = 0.08,
+            xref = "x",
+            yref = "paper",
+            text = "Demand Coverage = $(inventory_percentile)%",
+            font = PlotlyJS.attr(size=8, color="red"),
+            showarrow = false,
+            align = "left"
+        ),
+        PlotlyJS.attr(
+            x = inventory_level * 1.01,
+            y = 0.04,
+            xref = "x",
+            yref = "paper",
+            text = "Stockout Probability = $(stockout_probability)%",
+            font = PlotlyJS.attr(size=8, color="red"),
+            showarrow = false,
+            align = "left"
+        )
+    ]
+)
+
+# Create and display the plot
+fig = PlotlyJS.plot([forecast_trace, inventory_trace], layout)
+display(fig)
+
+# Print additional information
+println("Inventory Level: $inventory_level")
+println("Demand Coverage: $(inventory_percentile)%")
+println("Stockout Probability: $(stockout_probability)%")

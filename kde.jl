@@ -82,7 +82,9 @@ end
 
 # Aggregate to weekly sales
 df__on_season = filter(row -> row.onseason == 1, df)
+CSV.write("scratch2.csv", df__on_season)
 df__weekly = combine(groupby(df__on_season, [:season_id, :week_of_season]), :sales => sum => :weekly_sales)
+
 
 # --- Visualization: Weekly Sales by Season ---
 df_season8 = filter(row -> row.season_id == 8, df__weekly)
