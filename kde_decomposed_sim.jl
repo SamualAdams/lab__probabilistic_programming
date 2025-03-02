@@ -1,4 +1,4 @@
-# --- Package Imports ---
+#region package_imports
 using DataFrames
 using Dates
 using CSV
@@ -9,13 +9,14 @@ using DataFramesMeta
 using Printf
 using Interpolations
 using Random
+#endregion
 
-# --- Helper Functions ---
-
+#region helper_functions
 """
-    adaptive_rolling_mean(series::Vector{Float64}, window::Int=7)
+adaptive_rolling_mean(series::Vector{Float64}, window::Int=7)
 Computes a centered rolling mean with a minimum of 1 period.
 """
+#tag +adapt_rolling_mean
 function adaptive_rolling_mean(series::Vector{Float64}, window::Int=7)
     n = length(series)
     result = zeros(Float64, n)
@@ -28,10 +29,12 @@ function adaptive_rolling_mean(series::Vector{Float64}, window::Int=7)
     return result
 end
 
+
 """
-    rolling_std(series::Vector{Float64}, window::Int=5)
+rolling_std(series::Vector{Float64}, window::Int=5)
 Computes a centered rolling standard deviation with a minimum of 1 period.
 """
+#tag +adapt_rolling_std
 function rolling_std(series::Vector{Float64}, window::Int=5)
     n = length(series)
     result = fill(NaN, n)
@@ -46,21 +49,14 @@ function rolling_std(series::Vector{Float64}, window::Int=5)
     return result
 end
 
-"""
-    calculate_cumulative_sales(df::DataFrame, week_start::Int, week_end::Int)
-Calculates cumulative sales for a specified time horizon.
-"""
-function calculate_cumulative_sales(df::DataFrame, week_start::Int, week_end::Int)
-    df_range = filter(row -> week_start <= row.week_of_season <= week_end, df)
-    return transform(groupby(df_range, :season_id), :smoothed_sales => cumsum => :cumulative_sales)
-end
 
 """
     compute_interval_demand_cdf(df::DataFrame, week_start::Int, week_end::Int, inventory_level::Float64)
 Computes CDF for interval demand forecast and returns x, probabilities, and intersection probability.
 """
+#tag +cdf_from_df_with_pcols
 function compute_interval_demand_cdf(df::DataFrame, week_start::Int, week_end::Int, inventory_level::Float64)
-    
+
     if week_end <= week_start
         println("Error: week_end must be greater than week_start.")
         return nothing, nothing, nothing
@@ -87,10 +83,12 @@ function compute_interval_demand_cdf(df::DataFrame, week_start::Int, week_end::I
     println("fin")
 end
 
+
 """
     adaptive_kde_by_week(df::DataFrame, value_column::Symbol, window::Int=7)
 Fits KDEs to smoothed data for each week using a sliding window.
 """
+#tag +adapt_fit_kde_to_smooth
 function adaptive_kde_by_week(df::DataFrame, value_column::Symbol, window::Int=7)
     weeks = sort(unique(df.week_of_season))
     half = div(window, 2)
@@ -108,11 +106,13 @@ function adaptive_kde_by_week(df::DataFrame, value_column::Symbol, window::Int=7
     return kde_dict
 end
 
+
 """
     sample_kde_distribution(kde_models::Dict, num_samples::Int=1000)
 Samples from KDE models to estimate percentiles, mean, and standard deviation.
 """
-
+#region +kde_sampler
+#tag +sample_n_kde_in_seq
 function sample_from_kde(kde_model::UnivariateKDE, num_samples::Int)
     # Define a fine grid over the support of the KDE
     x = range(minimum(kde_model.x), maximum(kde_model.x), length=1000)
@@ -129,6 +129,7 @@ function sample_from_kde(kde_model::UnivariateKDE, num_samples::Int)
     return samples
 end
 
+#tag +add_weekly_kde_pcols
 function sample_kde_distribution(kde_models::Dict, num_samples::Int=1000)
     percentiles = 1:100
     stats = DataFrame(week_of_season=Int[], mean=Float64[], std_dev=Float64[])
@@ -137,18 +138,17 @@ function sample_kde_distribution(kde_models::Dict, num_samples::Int=1000)
     end
     for (week, kde_model) in kde_models
         if !isnothing(kde_model)
-            # Use custom sampling function instead of rand
             samples = sample_from_kde(kde_model, num_samples)
-            row = Dict(:week_of_season => week, 
-                       :mean => mean(samples), 
-                       :std_dev => std(samples))
+            row = Dict(:week_of_season => week,
+                :mean => mean(samples),
+                :std_dev => std(samples))
             for p in percentiles
                 row[Symbol("p$p")] = quantile(samples, p / 100)
             end
         else
-            row = Dict(:week_of_season => week, 
-                       :mean => NaN, 
-                       :std_dev => NaN)
+            row = Dict(:week_of_season => week,
+                :mean => NaN,
+                :std_dev => NaN)
             for p in percentiles
                 row[Symbol("p$p")] = NaN
             end
@@ -157,6 +157,7 @@ function sample_kde_distribution(kde_models::Dict, num_samples::Int=1000)
     end
     return stats
 end
+#endregion
 
 """
     Dataset(df::DataFrame; with_nulls::Bool=false, record_frequency::String="D", analysis_frequency::Union{Nothing, String}=nothing, smooth_window::Union{Nothing, Int}=nothing)
@@ -166,11 +167,11 @@ mutable struct Dataset
     df::DataFrame
     with_nulls::Bool
     record_frequency::String
-    analysis_frequency::Union{Nothing, String}
-    smooth_window::Union{Nothing, Int}
+    analysis_frequency::Union{Nothing,String}
+    smooth_window::Union{Nothing,Int}
 end
 
-function Dataset(df::DataFrame; with_nulls::Bool=false, record_frequency::String="D", analysis_frequency::Union{Nothing, String}=nothing, smooth_window::Union{Nothing, Int}=nothing)
+function Dataset(df::DataFrame; with_nulls::Bool=false, record_frequency::String="D", analysis_frequency::Union{Nothing,String}=nothing, smooth_window::Union{Nothing,Int}=nothing)
     dfc = deepcopy(df)
     sort!(dfc, :date)
     freq = record_frequency
@@ -203,32 +204,31 @@ function Dataset(df::DataFrame; with_nulls::Bool=false, record_frequency::String
     end
     return Dataset(dfc, with_nulls, record_frequency, analysis_frequency, smooth_window)
 end
+#endregion
 
-# --- Main Script ---
+#region main_script
 
 # Load dataset (assumes sales_data.csv has 'date' and 'sales' columns)
+#tag load_raw_data
 df_hbs_blitz = CSV.read("sales_data.csv", DataFrame)
-rename!(df_hbs_blitz, "date" => "date", "sales" => "value")
+
+#tag rename_and_sort
+rename!(df_hbs_blitz, "sales" => "value")
 df_hbs_blitz[!, :date] = Date.(df_hbs_blitz.date, "m/d/yyyy")
 df = df_hbs_blitz[:, [:value, :date]]
+sort!(df, :date)
 
-# Instantiate Dataset
-focal_dataset = Dataset(df, with_nulls=false, record_frequency="D", analysis_frequency="D", smooth_window=nothing)
-df_test = deepcopy(focal_dataset.df)
-sort!(df_test, :date)
-
-# Create main DataFrame
+#tag add_analysis_cols
 df = DataFrame(
-    sales = Float64.(df_test.value),
-    time_numeric = Int.(Dates.value.(df_test.date .- df_test.date[1])),
-    onseason_flag = [month(d) in [10, 11, 12, 1, 2, 3, 4] ? 1 : 0 for d in df_test.date],
-    season_start = [(month(d) == 1 && day(d) == 1) for d in df_test.date],
-    week_of_year = Int.(week.(df_test.date)),
-    month = Int.(month.(df_test.date)),
-    year = Int.(year.(df_test.date)),
-    date = df_test.date
+    sales=Float64.(df_test.value),
+    time_numeric=Int.(Dates.value.(df_test.date .- df_test.date[1])),
+    onseason_flag=[month(d) in [10, 11, 12, 1, 2, 3, 4] ? 1 : 0 for d in df_test.date],
+    season_start=[(month(d) == 1 && day(d) == 1) for d in df_test.date],
+    week_of_year=Int.(week.(df_test.date)),
+    month=Int.(month.(df_test.date)),
+    year=Int.(year.(df_test.date)),
+    date=df_test.date
 )
-
 
 # Assign season_id
 df[!, :season_id] = cumsum(df.season_start)
@@ -243,27 +243,26 @@ if !isempty(df_on_season)
 else
     println("Warning: No on-season data found, creating empty DataFrame")
     df_on_season = DataFrame(season_id=Int[], sales=Float64[], time_numeric=Int[], onseason_flag=Int[],
-    season_start=Bool[], week_of_year=Int[], month=Int[], year=Int[], date=Date[],
-    day_of_season=Int[], week_of_season=Int[])
+        season_start=Bool[], week_of_year=Int[], month=Int[], year=Int[], date=Date[],
+        day_of_season=Int[], week_of_season=Int[])
 end
 
-CSV.write("scratch.csv", df_on_season)
 # Group by season and week
 df_grouped = combine(groupby(df_on_season, [:season_id, :week_of_season, :onseason_flag]),
-                     :sales => sum => :sales,
-                     :date => first => :date)
+    :sales => sum => :sales,
+    :date => first => :date)
 
 # Add smoothed, normalized, and cumulative sales
 if !isempty(df_grouped)
     df_grouped[!, :smoothed_sales] = adaptive_rolling_mean(df_grouped.sales, 7)
     df_grouped = transform(groupby(df_grouped, :season_id),
-                           :smoothed_sales => (x -> (x .- mean(x)) ./ std(x)) => :normalized_sales,
-                           :smoothed_sales => cumsum => :cumulative_sales)
+        :smoothed_sales => (x -> (x .- mean(x)) ./ std(x)) => :normalized_sales,
+        :smoothed_sales => cumsum => :cumulative_sales)
 else
     println("Warning: No grouped data, creating empty DataFrame")
     df_grouped = DataFrame(season_id=Int[], week_of_season=Int[], onseason_flag=Int[],
-                          sales=Float64[], date=Date[], smoothed_sales=Float64[],
-                          normalized_sales=Float64[], cumulative_sales=Float64[])
+        sales=Float64[], date=Date[], smoothed_sales=Float64[],
+        normalized_sales=Float64[], cumulative_sales=Float64[])
 end
 
 display(df_grouped)
@@ -294,8 +293,8 @@ if !isempty(df_focal)
     df_focal[!, :baseline_sales_std] = rolling_std(df_focal.root_sales, 5)
 
     for p in 1:100
-        df_focal[!, Symbol("p$p")] = map(w -> percentile_df[percentile_df.week_of_season .== w, Symbol("p$p")][1],
-                                         df_focal.week_of_season) .* df_focal.baseline_sales_std .+ df_focal.baseline_sales
+        df_focal[!, Symbol("p$p")] = map(w -> percentile_df[percentile_df.week_of_season.==w, Symbol("p$p")][1],
+            df_focal.week_of_season) .* df_focal.baseline_sales_std .+ df_focal.baseline_sales
         df_focal[!, Symbol("p$p")] = max.(df_focal[!, Symbol("p$p")], 0)
     end
 
@@ -315,6 +314,10 @@ else
     nothing, nothing, nothing
 end
 
+#endregion
+
+#region vis
+
 # Ensure PlotlyJS is imported (add this at the top of your script if not already present)
 using PlotlyJS
 
@@ -324,84 +327,84 @@ stockout_probability = 100 - inventory_percentile
 
 # Create forecast CDF trace
 forecast_trace = PlotlyJS.scatter(
-    x = x_forecast,
-    y = cdf_forecast,
-    mode = "lines",
-    line = PlotlyJS.attr(color="gold", width=2),
-    name = "Cumulative Demand CDF"
+    x=x_forecast,
+    y=cdf_forecast,
+    mode="lines",
+    line=PlotlyJS.attr(color="gold", width=2),
+    name="Cumulative Demand CDF"
 )
 
 # Create inventory vertical line trace
 inventory_trace = PlotlyJS.scatter(
-    x = [inventory_level, inventory_level],
-    y = [0, intersection_prob_forecast],
-    mode = "lines",
-    line = PlotlyJS.attr(color="red", dash="dash"),
-    name = "Inventory Level ($inventory_level)"
+    x=[inventory_level, inventory_level],
+    y=[0, intersection_prob_forecast],
+    mode="lines",
+    line=PlotlyJS.attr(color="red", dash="dash"),
+    name="Inventory Level ($inventory_level)"
 )
 
 # Define dynamic x-axis range
-x_range = [minimum(x_forecast) - 0.1*(maximum(x_forecast)-minimum(x_forecast)),
-           maximum(x_forecast) + 0.1*(maximum(x_forecast)-minimum(x_forecast))]
+x_range = [minimum(x_forecast) - 0.1 * (maximum(x_forecast) - minimum(x_forecast)),
+    maximum(x_forecast) + 0.1 * (maximum(x_forecast) - minimum(x_forecast))]
 
 # Define layout with desired styling
 layout = PlotlyJS.Layout(
-    title = "Cumulative Demand CDF (Week $week_start to End of Season)",
-    xaxis = PlotlyJS.attr(
-        title = "Cumulative Sales",
-        range = x_range,
-        tickformat = ","
+    title="Cumulative Demand CDF (Week $week_start to End of Season)",
+    xaxis=PlotlyJS.attr(
+        title="Cumulative Sales",
+        range=x_range,
+        tickformat=","
     ),
-    yaxis = PlotlyJS.attr(
-        title = "Cumulative Probability",
-        range = [0, 1],
-        tickformat = ".0%"
+    yaxis=PlotlyJS.attr(
+        title="Cumulative Probability",
+        range=[0, 1],
+        tickformat=".0%"
     ),
-    width = 800,
-    height = 600,
-    legend = PlotlyJS.attr(x=1.05, y=1, xanchor="left", yanchor="top", font=PlotlyJS.attr(size=10)),
-    margin = PlotlyJS.attr(l=40, r=40, t=40, b=40),
-    template = "plotly_dark",
-    annotations = [
+    width=800,
+    height=600,
+    legend=PlotlyJS.attr(x=1.05, y=1, xanchor="left", yanchor="top", font=PlotlyJS.attr(size=10)),
+    margin=PlotlyJS.attr(l=40, r=40, t=40, b=40),
+    template="plotly_dark",
+    annotations=[
         PlotlyJS.attr(
-            x = inventory_level * 1.01,
-            y = 0.18,
-            xref = "x",
-            yref = "paper",
-            text = "KDE Model Results:",
-            font = PlotlyJS.attr(size=8, color="red"),
-            showarrow = false,
-            align = "left"
+            x=inventory_level * 1.01,
+            y=0.18,
+            xref="x",
+            yref="paper",
+            text="KDE Model Results:",
+            font=PlotlyJS.attr(size=8, color="red"),
+            showarrow=false,
+            align="left"
         ),
         PlotlyJS.attr(
-            x = inventory_level * 1.01,
-            y = 0.12,
-            xref = "x",
-            yref = "paper",
-            text = "Inventory = $(round(inventory_level))",
-            font = PlotlyJS.attr(size=8, color="red"),
-            showarrow = false,
-            align = "left"
+            x=inventory_level * 1.01,
+            y=0.12,
+            xref="x",
+            yref="paper",
+            text="Inventory = $(round(inventory_level))",
+            font=PlotlyJS.attr(size=8, color="red"),
+            showarrow=false,
+            align="left"
         ),
         PlotlyJS.attr(
-            x = inventory_level * 1.01,
-            y = 0.08,
-            xref = "x",
-            yref = "paper",
-            text = "Demand Coverage = $(inventory_percentile)%",
-            font = PlotlyJS.attr(size=8, color="red"),
-            showarrow = false,
-            align = "left"
+            x=inventory_level * 1.01,
+            y=0.08,
+            xref="x",
+            yref="paper",
+            text="Demand Coverage = $(inventory_percentile)%",
+            font=PlotlyJS.attr(size=8, color="red"),
+            showarrow=false,
+            align="left"
         ),
         PlotlyJS.attr(
-            x = inventory_level * 1.01,
-            y = 0.04,
-            xref = "x",
-            yref = "paper",
-            text = "Stockout Probability = $(stockout_probability)%",
-            font = PlotlyJS.attr(size=8, color="red"),
-            showarrow = false,
-            align = "left"
+            x=inventory_level * 1.01,
+            y=0.04,
+            xref="x",
+            yref="paper",
+            text="Stockout Probability = $(stockout_probability)%",
+            font=PlotlyJS.attr(size=8, color="red"),
+            showarrow=false,
+            align="left"
         )
     ]
 )
@@ -414,3 +417,5 @@ display(fig)
 println("Inventory Level: $inventory_level")
 println("Demand Coverage: $(inventory_percentile)%")
 println("Stockout Probability: $(stockout_probability)%")
+
+#endregion
