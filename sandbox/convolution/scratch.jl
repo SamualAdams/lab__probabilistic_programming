@@ -1,71 +1,51 @@
+# Include the module
+include("DistributionConvolution.jl")
+using .DistributionConvolution
 using Distributions
-using FFTW
-using Plots
 using KernelDensity
 
-# Define distributions
-dists = [Exponential(1.0), Normal(10.0, 3.0), Gamma(5.0, 2.0)]
-K = length(dists)
+# Define theoretical distributions (to generate samples)
+theoretical_dists = [Exponential(1.0), Normal(10.0, 3.0), Gamma(5.0, 2.0)]
+labels = ["Exponential(1.0)", "Normal(10.0, 3.0)", "Gamma(5.0, 2.0)"]
+K = length(theoretical_dists)
 
-# Grid parameters
-total_mean = sum(mean, dists)  # ~21.0
-total_std = sqrt(sum(var, dists))  # ~√20 ≈ 4.47
+# Parameters for grid and sampling
 N = 2^12  # 4096 points
+n_samples = 10000  # Number of samples per distribution
 sigma_range = 4
-x_min = total_mean - sigma_range * total_std  # ~7.6
-x_max = total_mean + sigma_range * total_std  # ~34.4
+
+# Calculate total mean and std for grid (using theoretical distributions)
+total_mean = sum(mean, theoretical_dists)
+total_var = sum(var, theoretical_dists)
+total_std = sqrt(total_var)
+x_min = total_mean - sigma_range * total_std
+x_max = total_mean + sigma_range * total_std
 x = range(x_min, x_max, length=N)
 delta = (x_max - x_min) / (N - 1)
 
-# Discretize PDFs and compute CDFs for individual distributions
+# Sample data and create KDEs
 pdfs = zeros(N, K)
 cdfs = zeros(N, K)
 for k in 1:K
-    pdf_vals = pdf(dists[k], x)
-    pdf_vals ./= (sum(pdf_vals) * delta)  # Normalize to integrate to 1
+    # Sample data
+    samples = rand(theoretical_dists[k], n_samples)
+    # Compute KDE
+    kde_obj = kde(samples, x)
+    pdf_vals = kde_obj.density
+    pdf_vals ./= (sum(pdf_vals) * delta)  # Normalize KDE PDF
     pdfs[:, k] = pdf_vals
-    cdfs[:, k] = cdf(dists[k], x)  # Exact CDF from Distributions.jl
+    # Compute exact CDF for comparison (or approximate via KDE if desired)
+    cdfs[:, k] = cdf(theoretical_dists[k], x)
 end
 
-# FFT Convolution for PDF
-fft_pdfs = fft(pdfs, 1)
-fft_result = prod(fft_pdfs, dims=2)
-conv_result = real(ifft(fft_result, 1))[:, 1]
-conv_result ./= (sum(conv_result) * delta)  # Normalize convolution PDF
+# Compute convolution using precomputed pdfs/cdfs/x
+x, conv_pdf, conv_cdf, pdfs, cdfs = convolve_distributions(pdfs=pdfs, cdfs=cdfs, x=x)
 
-sum(conv_result) * delta
+# Verify normalization and mean
+integral = sum(conv_pdf) * delta
+conv_mean = sum(x .* conv_pdf) * delta
+println("Integral of convolved PDF (should be ~1): ", integral)
+println("Mean of convolved PDF (should be ~21): ", conv_mean)
 
-# Compute convolution CDF
-conv_cdf = cumsum(conv_result) * delta
-conv_cdf ./= conv_cdf[end]  # Normalize to reach 1
-
-# Print mean for verification
-conv_mean = sum(x .* conv_result) * delta
-println("Mean of normalized conv_result: ", conv_mean)
-
-# Plot PDFs
-p1 = plot(x, conv_result, 
-          label="Convolution PDF",
-          xlabel="x",
-          ylabel="Density",
-          title="PDFs",
-          lw=2,
-          legend=:topright)
-plot!(p1, x, pdfs[:, 1], label="Exponential(1.0)", lw=1, ls=:dash)
-plot!(p1, x, pdfs[:, 2], label="Normal(10.0, 3.0)", lw=1, ls=:dash)
-plot!(p1, x, pdfs[:, 3], label="Gamma(5.0, 2.0)", lw=1, ls=:dash)
-
-# Plot CDFs
-p2 = plot(x, conv_cdf, 
-          label="Convolution CDF",
-          xlabel="x",
-          ylabel="Cumulative Probability",
-          title="CDFs",
-          lw=2,
-          legend=:bottomright)
-plot!(p2, x, cdfs[:, 1], label="Exponential(1.0)", lw=1, ls=:dash)
-plot!(p2, x, cdfs[:, 2], label="Normal(10.0, 3.0)", lw=1, ls=:dash)
-plot!(p2, x, cdfs[:, 3], label="Gamma(5.0, 2.0)", lw=1, ls=:dash)
-
-# Display both plots side by side
-plot(p1, p2, layout=(1, 2), size=(1000, 400))
+# Plot results
+plot_convolution(x, conv_pdf, conv_cdf, pdfs, cdfs, labels)
